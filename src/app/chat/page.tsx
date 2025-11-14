@@ -1,0 +1,568 @@
+'use client'
+
+import { useState, useEffect, useRef } from 'react'
+import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
+import { Button } from '../../components/ui/button'
+import { Input } from '../../components/ui/input'
+
+import { Avatar, AvatarFallback, AvatarImage } from '../../components/ui/avatar'
+import { 
+  IconMessageCircle as MessageSquare, 
+  IconSend as Send, 
+  IconPhone as Phone, 
+  IconVideo as Video, 
+  IconFileText as FileText, 
+  IconPhoto as Image, 
+  IconMoodSmile as Smile,
+  IconClock as Clock,
+  IconUser as User,
+  IconRobot as Bot,
+  IconAlertCircle as AlertCircle,
+  IconCheck as CheckCircle,
+  IconX as X
+} from '@tabler/icons-react'
+import { notify } from '../../components/ui/notification'
+import { ChatSkeleton } from '../../components/LoadingSkeleton'
+
+interface ChatMessage {
+  id: string
+  content: string
+  sender: 'user' | 'agent'
+  timestamp: Date
+  type: 'text' | 'image' | 'file'
+  status: 'sent' | 'delivered' | 'read'
+}
+
+interface SupportCategory {
+  id: string
+  name: string
+  description: string
+  icon: React.ComponentType<{ className?: string }>
+  color: string
+}
+
+export default function LiveChatPage() {
+  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [newMessage, setNewMessage] = useState('')
+  const [isTyping, setIsTyping] = useState(false)
+  const [chatStatus, setChatStatus] = useState<'waiting' | 'connected' | 'ended'>('waiting')
+  const [agentInfo, setAgentInfo] = useState<{
+    name: string
+    avatar: string
+    status: 'online' | 'busy' | 'offline'
+    rating: number
+  } | null>(null)
+  const [selectedCategory, setSelectedCategory] = useState<string>('')
+  const [isInitialLoading, setIsInitialLoading] = useState(true)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  const supportCategories: SupportCategory[] = [
+    {
+      id: 'emergency',
+      name: 'Emergency Support',
+      description: 'Urgent roadside assistance',
+      icon: AlertCircle,
+      color: 'text-red-500'
+    },
+    {
+      id: 'charging',
+      name: 'Charging Issues',
+      description: 'Charging station problems',
+      icon: MessageSquare,
+      color: 'text-green-500'
+    },
+    {
+      id: 'technical',
+      name: 'Technical Support',
+      description: 'Vehicle technical issues',
+      icon: Bot,
+      color: 'text-green-500'
+    },
+    {
+      id: 'billing',
+      name: 'Billing & Payments',
+      description: 'Payment and invoice queries',
+      icon: FileText,
+      color: 'text-purple-500'
+    }
+  ]
+
+  // Load chat history and connect agent
+  useEffect(() => {
+    const loadChatHistory = async () => {
+      try {
+        // Load previous messages if any
+        const response = await fetch(`/api/chat/messages?chatId=support-${selectedCategory || 'general'}&limit=20`)
+        if (response.ok) {
+          const data = await response.json()
+          if (data.messages && data.messages.length > 0) {
+            setMessages(data.messages.map((msg: any) => ({
+              id: msg.id,
+              content: msg.message,
+              sender: msg.senderType === 'user' ? 'user' : 'agent',
+              timestamp: new Date(msg.timestamp),
+              type: 'text',
+              status: msg.isRead ? 'read' : 'sent'
+            })))
+          }
+        }
+      } catch (error) {
+        console.error('Error loading chat history:', error)
+      }
+    }
+
+    const timer = setTimeout(async () => {
+      setChatStatus('connected')
+      setAgentInfo({
+        name: 'Sarah Chen',
+        avatar: '/api/placeholder/40/40',
+        status: 'online',
+        rating: 4.9
+      })
+      
+      await loadChatHistory()
+      
+      // Add welcome message if no previous messages
+      if (messages.length === 0) {
+        setMessages([
+          {
+            id: '1',
+            content: 'Hi! I\'m Sarah, your EV Rescue support specialist. How can I help you today?',
+            sender: 'agent',
+            timestamp: new Date(),
+            type: 'text',
+            status: 'read'
+          }
+        ])
+      }
+      setIsInitialLoading(false)
+    }, 2000)
+
+    return () => clearTimeout(timer)
+  }, [selectedCategory])
+
+  // Auto-scroll to bottom
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  const handleSendMessage = async () => {
+    if (!newMessage.trim()) return
+
+    const userMessage: ChatMessage = {
+      id: Date.now().toString(),
+      content: newMessage,
+      sender: 'user',
+      timestamp: new Date(),
+      type: 'text',
+      status: 'sent'
+    }
+
+    setMessages(prev => [...prev, userMessage])
+    const currentMessage = newMessage
+    setNewMessage('')
+    setIsTyping(true)
+
+    try {
+      // Send message to API
+      const response = await fetch('/api/chat/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          chatId: `support-${Date.now()}`,
+          senderId: 'user',
+          senderName: 'You',
+          senderType: 'user',
+          message: currentMessage
+        })
+      })
+
+      if (response.ok) {
+        // Update message status to delivered
+        setMessages(prev => prev.map(msg => 
+          msg.id === userMessage.id ? { ...msg, status: 'delivered' as const } : msg
+        ))
+      }
+
+      // Get AI-powered agent response
+      const aiResponse = await fetch('/api/chat/ai', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: currentMessage,
+          context: { category: selectedCategory, agentInfo }
+        })
+      })
+
+      if (aiResponse.ok) {
+        const aiData = await aiResponse.json()
+        
+        setTimeout(() => {
+          setIsTyping(false)
+          const agentResponse: ChatMessage = {
+            id: (Date.now() + 1).toString(),
+            content: aiData.content,
+            sender: 'agent',
+            timestamp: new Date(),
+            type: 'text',
+            status: 'read'
+          }
+          setMessages(prev => [...prev, agentResponse])
+        }, 1000 + Math.random() * 2000)
+      } else {
+        // Fallback to basic response
+        setTimeout(() => {
+          setIsTyping(false)
+          const agentResponse: ChatMessage = {
+            id: (Date.now() + 1).toString(),
+            content: getAgentResponse(currentMessage),
+            sender: 'agent',
+            timestamp: new Date(),
+            type: 'text',
+            status: 'read'
+          }
+          setMessages(prev => [...prev, agentResponse])
+        }, 1000 + Math.random() * 2000)
+      }
+    } catch (error) {
+      console.error('Error sending message:', error)
+      setIsTyping(false)
+      // Fallback response
+      const agentResponse: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        content: "I apologize, but I'm experiencing some technical difficulties. Please try again or contact our support team directly.",
+        sender: 'agent',
+        timestamp: new Date(),
+        type: 'text',
+        status: 'read'
+      }
+      setMessages(prev => [...prev, agentResponse])
+    }
+  }
+
+  const getAgentResponse = (userMessage: string): string => {
+    const lowerMessage = userMessage.toLowerCase()
+    
+    if (lowerMessage.includes('emergency') || lowerMessage.includes('urgent')) {
+      return 'I understand this is urgent. Let me connect you with our emergency response team immediately. Can you provide your current location?'
+    } else if (lowerMessage.includes('charging') || lowerMessage.includes('battery')) {
+      return 'I can help you with charging issues. Are you experiencing problems with a specific charging station or your vehicle\'s charging system?'
+    } else if (lowerMessage.includes('payment') || lowerMessage.includes('bill')) {
+      return 'I\'ll be happy to help with your billing questions. Can you provide your account number or the specific issue you\'re experiencing?'
+    } else {
+      return 'Thank you for your message. I\'m here to help. Could you please provide more details about your concern?'
+    }
+  }
+
+  const handleCategorySelect = (categoryId: string) => {
+    setSelectedCategory(categoryId)
+    setChatStatus('waiting')
+    setMessages([])
+    setAgentInfo(null)
+    
+    // Simulate reconnection
+    setTimeout(() => {
+      setChatStatus('connected')
+      setAgentInfo({
+        name: 'Michael Rodriguez',
+        avatar: '/api/placeholder/40/40',
+        status: 'online',
+        rating: 4.8
+      })
+      
+      setMessages([
+        {
+          id: '1',
+          content: `Hi! I'm Michael, your ${supportCategories.find(c => c.id === categoryId)?.name} specialist. How can I assist you?`,
+          sender: 'agent',
+          timestamp: new Date(),
+          type: 'text',
+          status: 'read'
+        }
+      ])
+    }, 1500)
+  }
+
+  const endChat = () => {
+    setChatStatus('ended')
+    notify.success('Chat Ended', 'Your chat session has been ended. Thank you for contacting EV Rescue!')
+  }
+
+  if (isInitialLoading) {
+    return (
+      <div className="min-h-screen bg-black p-6">
+        <div className="max-w-6xl mx-auto">
+          <div className="text-center mb-8">
+            <h1 className="text-4xl md:text-5xl font-bold text-white mb-4">Live Chat Support</h1>
+            <p className="text-xl text-green-400 max-w-2xl mx-auto">
+              24/7 real-time support for all your EV rescue needs
+            </p>
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            <div className="lg:col-span-1">
+              <Card className="bg-gray-900 border-gray-700">
+                <CardHeader>
+                  <CardTitle className="text-white">Support Categories</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {[...Array(4)].map((_, i) => (
+                    <div key={i} className="p-4 rounded-lg border-2 border-gray-600 bg-gray-800">
+                      <div className="animate-pulse flex items-center gap-3">
+                        <div className="w-5 h-5 bg-gray-700 rounded"></div>
+                        <div className="space-y-2">
+                          <div className="h-4 bg-gray-700 rounded w-24"></div>
+                          <div className="h-3 bg-gray-700 rounded w-32"></div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            </div>
+            <div className="lg:col-span-3">
+              <Card className="bg-gray-900 border-gray-700 h-[600px]">
+                <ChatSkeleton />
+              </Card>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen bg-black p-6 animate-fade-in">
+      <div className="max-w-6xl mx-auto">
+        {/* Header */}
+        <div className="text-center mb-8 animate-slide-in-left">
+          <h1 className="text-4xl md:text-5xl font-bold text-white mb-4">Live Chat Support</h1>
+          <p className="text-xl text-green-400 max-w-2xl mx-auto">
+            24/7 real-time support for all your EV rescue needs
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+          {/* Support Categories */}
+          <div className="lg:col-span-1">
+            <Card className="bg-gray-900 border-gray-700">
+              <CardHeader>
+                <CardTitle className="text-white">Support Categories</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {supportCategories.map((category) => {
+                  const Icon = category.icon
+                  return (
+                    <button
+                      key={category.id}
+                      onClick={() => handleCategorySelect(category.id)}
+                      className={`w-full p-4 rounded-lg border-2 transition-all duration-200 hover:scale-105 text-left ${
+                        selectedCategory === category.id
+                          ? 'border-green-500 bg-green-500/10'
+                          : 'border-gray-600 hover:border-gray-500 bg-gray-800 hover:bg-gray-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <Icon className={`h-5 w-5 ${category.color}`} />
+                        <div>
+                          <div className="font-medium text-white">{category.name}</div>
+                          <div className="text-sm text-gray-400">{category.description}</div>
+                        </div>
+                      </div>
+                    </button>
+                  )
+                })}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Chat Interface */}
+          <div className="lg:col-span-3">
+            <Card className="bg-gray-900 border-gray-700 h-[600px] flex flex-col">
+              {/* Chat Header */}
+              <CardHeader className="border-b border-gray-700 pb-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    {agentInfo ? (
+                      <>
+                        <Avatar className="h-10 w-10">
+                          <AvatarImage src={agentInfo.avatar} alt={agentInfo.name} />
+                          <AvatarFallback className="bg-green-600 text-white">
+                            {agentInfo.name.split(' ').map(n => n[0]).join('')}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div>
+                          <div className="font-semibold text-white">{agentInfo.name}</div>
+                          <div className="flex items-center gap-2 text-sm">
+                            <div className={`w-2 h-2 rounded-full ${
+                              agentInfo.status === 'online' ? 'bg-green-500' : 
+                              agentInfo.status === 'busy' ? 'bg-yellow-500' : 'bg-gray-500'
+                            }`} />
+                            <span className="text-gray-400 capitalize">{agentInfo.status}</span>
+                            <span className="text-gray-400">•</span>
+                            <span className="text-yellow-400">★ {agentInfo.rating}</span>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-gray-600 flex items-center justify-center">
+                          <User className="h-5 w-5 text-gray-400" />
+                        </div>
+                        <div>
+                          <div className="font-semibold text-white">Connecting...</div>
+                          <div className="text-sm text-gray-400">Please wait</div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    {chatStatus === 'connected' && (
+                      <>
+                        <Button variant="ghost" size="icon" className="text-gray-400 hover:text-white">
+                          <Phone className="h-4 w-4" />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="text-gray-400 hover:text-white">
+                          <Video className="h-4 w-4" />
+                        </Button>
+                      </>
+                    )}
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      onClick={endChat}
+                      className="text-red-400 hover:text-red-300"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+
+              {/* Chat Messages */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {messages.map((message) => (
+                  <div
+                    key={message.id}
+                    className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <div className={`max-w-xs lg:max-w-md p-3 rounded-lg ${
+                      message.sender === 'user'
+                        ? 'bg-green-600 text-white'
+                        : 'bg-gray-700 text-white'
+                    }`}>
+                      <div className="text-sm">{message.content}</div>
+                      <div className="flex items-center justify-between mt-2 text-xs opacity-70">
+                        <span>{message.timestamp.toLocaleTimeString()}</span>
+                        {message.sender === 'user' && (
+                          <span className="flex items-center gap-1">
+                            {message.status === 'sent' && <Clock className="h-3 w-3" />}
+                            {message.status === 'delivered' && <CheckCircle className="h-3 w-3" />}
+                            {message.status === 'read' && <CheckCircle className="h-3 w-3 text-green-400" />}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                
+                {isTyping && (
+                  <div className="flex justify-start">
+                    <div className="bg-gray-700 text-white p-3 rounded-lg">
+                      <div className="flex items-center gap-2">
+                        <div className="flex space-x-1">
+                          <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                          <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:0.1s]"></div>
+                          <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:0.2s]"></div>
+                        </div>
+                        <span className="text-sm text-gray-400">Agent is typing...</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                <div ref={messagesEndRef} />
+              </div>
+
+              {/* Quick Actions */}
+              {messages.length > 0 && (
+                <div className="border-t border-gray-700 p-4">
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setNewMessage("I need emergency charging assistance")}
+                      className="text-xs bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20"
+                    >
+                      🚨 Emergency Help
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setNewMessage("Can you help me find nearby charging stations?")}
+                      className="text-xs bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20"
+                    >
+                      🔋 Find Chargers
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setNewMessage("I need help with my subscription")}
+                      className="text-xs bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20"
+                    >
+                      💳 Account Help
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setNewMessage("Can you track my current request?")}
+                      className="text-xs bg-purple-500/10 border-purple-500/30 text-purple-400 hover:bg-purple-500/20"
+                    >
+                      📍 Track Request
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Chat Input */}
+              <div className="border-t border-gray-700 p-4">
+                <div className="flex items-center gap-3">
+                  <Button variant="ghost" size="icon" className="text-gray-400 hover:text-white">
+                    <Image className="h-4 w-4" />
+                  </Button>
+                  <Button variant="ghost" size="icon" className="text-gray-400 hover:text-white">
+                    <FileText className="h-4 w-4" />
+                  </Button>
+                  <Button variant="ghost" size="icon" className="text-gray-400 hover:text-white">
+                    <Smile className="h-4 w-4" />
+                  </Button>
+                  
+                  <Input
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+                    placeholder="Type your message..."
+                    className="flex-1 bg-gray-800 border-gray-600 text-white placeholder-gray-400"
+                    disabled={chatStatus !== 'connected'}
+                  />
+                  
+                  <Button
+                    onClick={handleSendMessage}
+                    disabled={!newMessage.trim() || chatStatus !== 'connected'}
+                    className="bg-green-600 hover:bg-green-700 text-white"
+                  >
+                    <Send className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
